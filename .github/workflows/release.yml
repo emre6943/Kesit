@@ -143,8 +143,8 @@ jobs:
 
   linux:
     needs: version
-    # The oldest supported runner, so the binary runs on older glibc versions.
-    runs-on: ubuntu-22.04
+    # Not older: the PipeWire headers on 22.04 are too old for the capture crate.
+    runs-on: ubuntu-24.04
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:

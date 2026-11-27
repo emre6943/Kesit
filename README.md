@@ -72,7 +72,7 @@ kesit &
 ```
 
 The binary needs GTK 3 at runtime, and a tray icon needs libayatana-appindicator (both are
-present on most desktops). The prebuilt binary is built on Ubuntu 22.04.
+present on most desktops). The prebuilt binary is built on Ubuntu 24.04, so it needs glibc 2.39 or newer; on older distributions build from source.
 
 ### Build from source
 

@@ -55,7 +55,7 @@ cargo-deny and shellcheck. Actions are pinned to commit SHAs (Dependabot updates
 
 `.github/workflows/release.yml`: a `vX.Y.Z` tag (must equal `Cargo.toml`'s version) builds the
 universal app with `bundle-macos.sh --universal`, `package-macos.sh` (zip + dmg) and
-`package-linux.sh` (tarball on ubuntu-22.04), writes `SHA256SUMS` and publishes a GitHub Release
+`package-linux.sh` (tarball on ubuntu-24.04), writes `SHA256SUMS` and publishes a GitHub Release
 with the `CHANGELOG.md` section as notes. `workflow_dispatch` is a dry run that only uploads
 artifacts. Signing uses the secrets `MACOS_CERTIFICATE_P12`, `MACOS_CERTIFICATE_PASSWORD`,
 `MACOS_SIGN_IDENTITY`; notarization `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`
