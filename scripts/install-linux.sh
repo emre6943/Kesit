@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Installs kesit for the current user: ~/.local/bin/kesit and a .desktop
-# launcher. Launch at login is managed by kesit itself (Settings).
+# Installs kesit for the current user: ~/.local/bin/kesit, an icon and a
+# .desktop launcher. Launch at login is managed by kesit itself (Settings).
+#
+# Run from a release tarball, it installs the prebuilt binary next to it;
+# run from a source checkout, it builds with cargo first.
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
-ROOT="$PWD"
+HERE="$(cd "$(dirname "$0")" && pwd)"
 BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 ICON_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps"
@@ -14,15 +16,28 @@ if [[ "$(uname -s)" != "Linux" ]]; then
   exit 1
 fi
 
-echo "==> cargo build --release"
-cargo build --release
+if [[ -f "$HERE/kesit" ]]; then
+  # Release tarball: kesit, kesit.png and this script side by side.
+  BINARY="$HERE/kesit"
+  ICON="$HERE/kesit.png"
+  MAKE_ICON=""
+else
+  ROOT="$(cd "$HERE/.." && pwd)"
+  echo "==> cargo build --release"
+  (cd "$ROOT" && cargo build --release --locked)
+  BINARY="$ROOT/target/release/kesit"
+  ICON=""
+  MAKE_ICON="$ROOT/scripts/make-icon.py"
+fi
 
 echo "==> installing $BIN_DIR/kesit"
-install -Dm755 "$ROOT/target/release/kesit" "$BIN_DIR/kesit"
+install -Dm755 "$BINARY" "$BIN_DIR/kesit"
 
-if command -v python3 >/dev/null; then
-  mkdir -p "$ICON_DIR"
-  python3 "$ROOT/scripts/make-icon.py" "$ICON_DIR/kesit.png"
+mkdir -p "$ICON_DIR"
+if [[ -n "$ICON" && -f "$ICON" ]]; then
+  install -m644 "$ICON" "$ICON_DIR/kesit.png"
+elif [[ -n "$MAKE_ICON" ]] && command -v python3 >/dev/null; then
+  python3 "$MAKE_ICON" "$ICON_DIR/kesit.png"
 fi
 
 # Quotes a path for a desktop entry's Exec key (Desktop Entry Specification).

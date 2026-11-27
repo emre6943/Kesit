@@ -1,0 +1,221 @@
+name: Release
+
+# A pushed tag vX.Y.Z builds macOS and Linux packages and publishes them as a
+# GitHub Release. Running the workflow by hand is a dry run: it builds the same
+# packages and uploads them as workflow artifacts, without publishing anything.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: version
+        name: Check the tag against Cargo.toml
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          cargo_version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
+          if [[ "$REF_TYPE" == "tag" ]]; then
+            tag_version="${REF_NAME#v}"
+            if [[ "$tag_version" != "$cargo_version" ]]; then
+              echo "::error::Tag $REF_NAME does not match Cargo.toml version $cargo_version"
+              exit 1
+            fi
+          else
+            echo "::notice::Dry run from $REF_NAME: building $cargo_version without publishing"
+          fi
+          echo "version=$cargo_version" >> "$GITHUB_OUTPUT"
+
+  macos:
+    needs: version
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      HAVE_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12 != '' && secrets.MACOS_CERTIFICATE_PASSWORD != '' && secrets.MACOS_SIGN_IDENTITY != '' }}
+      HAVE_NOTARY: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, 2026-11-15
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Import the signing certificate
+        if: env.HAVE_CERTIFICATE == 'true'
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/kesit-signing.keychain-db"
+          keychain_password="$(openssl rand -base64 32)"
+          echo "::add-mask::$keychain_password"
+          printf '%s' "$MACOS_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -f pkcs12 \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+            -k "$keychain_password" "$keychain" > /dev/null
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          # codesign searches the user keychain list; keep the existing ones.
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          echo "KESIT_SIGN_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
+      - name: Build and sign Kesit.app (universal)
+        env:
+          KESIT_SIGN_IDENTITY: ${{ env.HAVE_CERTIFICATE == 'true' && secrets.MACOS_SIGN_IDENTITY || '' }}
+        run: |
+          if [[ "$HAVE_CERTIFICATE" != "true" ]]; then
+            echo "::warning::No signing certificate configured: Kesit.app is signed ad hoc and NOT notarized. Gatekeeper will block its first launch."
+          fi
+          ./scripts/bundle-macos.sh --universal --version "$VERSION"
+          lipo -archs dist/Kesit.app/Contents/MacOS/kesit
+          codesign --display --verbose=2 dist/Kesit.app 2>&1 | grep -E '^(Identifier|Format|Authority|TeamIdentifier|Runtime|Timestamp)' || true
+
+      - name: Notarize and staple Kesit.app
+        if: env.HAVE_CERTIFICATE == 'true' && env.HAVE_NOTARY == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          ditto -c -k --keepParent dist/Kesit.app "$RUNNER_TEMP/Kesit-notarize.zip"
+          ./scripts/notarize-macos.sh "$RUNNER_TEMP/Kesit-notarize.zip"
+          xcrun stapler staple dist/Kesit.app
+          xcrun stapler validate dist/Kesit.app
+          spctl --assess --type execute --verbose dist/Kesit.app
+
+      - name: Report notarization status
+        if: env.HAVE_CERTIFICATE != 'true' || env.HAVE_NOTARY != 'true'
+        run: echo "::warning::This build is NOT notarized (missing signing or APPLE_* notarization secrets)."
+
+      - name: Package zip and dmg
+        env:
+          KESIT_SIGN_IDENTITY: ${{ env.HAVE_CERTIFICATE == 'true' && secrets.MACOS_SIGN_IDENTITY || '' }}
+        run: ./scripts/package-macos.sh "$VERSION"
+
+      - name: Notarize and staple the disk image
+        if: env.HAVE_CERTIFICATE == 'true' && env.HAVE_NOTARY == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          dmg="dist/Kesit-${VERSION}-macos-universal.dmg"
+          ./scripts/notarize-macos.sh "$dmg"
+          xcrun stapler staple "$dmg"
+
+      - name: Remove the signing keychain
+        if: always() && env.KESIT_SIGN_KEYCHAIN != ''
+        run: security delete-keychain "$KESIT_SIGN_KEYCHAIN" || true
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos
+          path: |
+            dist/Kesit-*-macos-universal.zip
+            dist/Kesit-*-macos-universal.dmg
+          if-no-files-found: error
+
+  linux:
+    needs: version
+    # The oldest supported runner, so the binary runs on older glibc versions.
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libgtk-3-dev libxdo-dev \
+            libayatana-appindicator3-dev libxcb1-dev libxcb-randr0-dev \
+            libpipewire-0.3-dev libclang-dev libwayland-dev libegl-dev \
+            libdbus-1-dev libgbm-dev
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, 2026-11-15
+        with:
+          toolchain: stable
+      - run: ./scripts/package-linux.sh "$VERSION"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux
+          path: dist/kesit-*-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: [version, macos, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload its assets
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Write SHA256SUMS
+        working-directory: assets
+        run: |
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Extract the release notes from CHANGELOG.md
+        run: |
+          awk -v v="$VERSION" '
+            /^## \[/ { if (found) exit; if (index($0, "## [" v "]") == 1) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if [[ ! -s "$RUNNER_TEMP/notes.md" ]]; then
+            echo "Kesit $VERSION" > "$RUNNER_TEMP/notes.md"
+          fi
+      - name: Upload the dry-run packages
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-dry-run
+          path: assets/
+          if-no-files-found: error
+      - name: Publish the GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          prerelease=()
+          if [[ "$VERSION" == *-* ]]; then
+            prerelease=(--prerelease)
+          fi
+          gh release create "$TAG" assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Kesit $VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --verify-tag "${prerelease[@]}"

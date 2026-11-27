@@ -1,7 +1,8 @@
 # Kesit
 
-Screenshot + annotation tool replacing Shottr. Rust, one crate, one binary `kesit`, macOS
-(primary, Apple Silicon) and Linux. No Windows.
+Screenshot + annotation tool. Rust (MSRV 1.95, set by egui 0.37), one crate, one binary `kesit`,
+macOS 14+ (primary; universal release builds) and Linux. No Windows. Public repo: no personal
+names, machine paths, signing identities or team IDs in tracked files.
 
 ## Stack
 
@@ -40,14 +41,29 @@ Screenshot + annotation tool replacing Shottr. Rust, one crate, one binary `kesi
 cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
-./scripts/bundle-macos.sh     # dist/Kesit.app as org.versesoftware.kesit; ad-hoc, or KESIT_SIGN_IDENTITY
-./scripts/install-linux.sh    # Linux only
+./scripts/bundle-macos.sh [--universal] [--version X.Y.Z]   # dist/Kesit.app, hardened runtime
+./scripts/package-macos.sh X.Y.Z   # dist/Kesit-X.Y.Z-macos-universal.{zip,dmg}
+./scripts/install-linux.sh    # Linux only; builds from source, or installs the binary beside it
 cargo deny check              # licences, advisories, sources (deny.toml)
+shellcheck scripts/*.sh && actionlint
 ```
 
-CI (`.github/workflows/ci.yml`) runs fmt, clippy `-D warnings` and tests on macOS and Ubuntu.
+CI (`.github/workflows/ci.yml`) runs fmt, clippy `-D warnings` and tests on macOS and Ubuntu, plus
+cargo-deny and shellcheck. Actions are pinned to commit SHAs (Dependabot updates them).
 
-Linux can be type-checked from the Mac in Docker (`rust:1.95-slim-bookworm` plus the apt packages
+## Release
+
+`.github/workflows/release.yml`: a `vX.Y.Z` tag (must equal `Cargo.toml`'s version) builds the
+universal app with `bundle-macos.sh --universal`, `package-macos.sh` (zip + dmg) and
+`package-linux.sh` (tarball on ubuntu-22.04), writes `SHA256SUMS` and publishes a GitHub Release
+with the `CHANGELOG.md` section as notes. `workflow_dispatch` is a dry run that only uploads
+artifacts. Signing uses the secrets `MACOS_CERTIFICATE_P12`, `MACOS_CERTIFICATE_PASSWORD`,
+`MACOS_SIGN_IDENTITY`; notarization `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`
+(`scripts/notarize-macos.sh`). Without them the build is ad-hoc signed, not notarized, with a
+warning. After a release, `scripts/update-cask.sh X.Y.Z` fills `packaging/homebrew/Casks/kesit.rb`,
+which is copied to the separate `homebrew-tap` repo. `scripts/install.sh` is the curl installer.
+
+Linux can be built and type-checked from a Mac in Docker (`rust:1.95-slim-bookworm` plus the apt packages
 in README.md; mount the repo read-only and set `CARGO_TARGET_DIR=/tmp/target`).
 
 ## Gotchas
@@ -57,6 +73,12 @@ in README.md; mount the repo read-only and set `CARGO_TARGET_DIR=/tmp/target`).
   and menu bar. Remove and re-add Kesit in System Settings → Privacy & Security → Screen & System
   Audio Recording, then restart the daemon. When launched from a terminal, the permission belongs
   to the terminal app, not Kesit.
+- **Minimum macOS is 14:** `platform.rs` calls `NSApplication::activate` (macOS 14+, no
+  fallback). Keep `LSMinimumSystemVersion`, `MACOSX_DEPLOYMENT_TARGET` (both in
+  `bundle-macos.sh`), the cask's `depends_on macos:` and the README in step.
+- **Hardened runtime, no entitlements:** screen capture is a TCC permission, GL is a system
+  framework, `open`/`xdg-open` are child processes, not Apple Events. Adding JIT, dlopen of
+  unsigned libraries or Apple Events would need an entitlements file.
 - **`CGWindowListCreateImage` is deprecated** (macOS 14+); xcap 0.9 still uses it. If a future
   macOS drops it, capture needs ScreenCaptureKit.
 - **Never initialise egui/GL in the daemon** — it must stay near zero CPU (~12 MB footprint, one

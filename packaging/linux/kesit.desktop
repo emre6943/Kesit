@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=Kesit
+Comment=Screenshot and annotate
+Exec=kesit
+Icon=kesit
+Terminal=false
+Categories=Utility;Graphics;
+Actions=Capture;Settings;
+
+[Desktop Action Capture]
+Name=Capture
+Exec=kesit capture
+
+[Desktop Action Settings]
+Name=Settings
+Exec=kesit settings

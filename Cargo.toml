@@ -2,13 +2,16 @@
 name = "kesit"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.95"
 description = "A lightweight screenshot and annotation tool for macOS and Linux"
 license = "MIT"
 readme = "README.md"
-keywords = ["screenshot", "annotation", "egui"]
+repository = "https://github.com/emre6943/Kesit"
+homepage = "https://github.com/emre6943/Kesit"
+keywords = ["screenshot", "annotation", "screen-capture", "egui", "macos"]
 categories = ["multimedia::images", "gui"]
 publish = false
+include = ["/src/**/*.rs", "/Cargo.lock", "/LICENSE", "/README.md"]
 
 [dependencies]
 ab_glyph = "0.2.32"
