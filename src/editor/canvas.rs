@@ -1,5 +1,10 @@
 //! The image area: painting annotations and handling the pointer.
 
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::hash::{DefaultHasher, Hash, Hasher};
+
 use egui::emath::GuiRounding as _;
 use egui::{
     Align2, Color32, CursorIcon, FontId, Id, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, pos2,
@@ -38,6 +43,65 @@ impl Mapping {
     }
 }
 
+/// Rasterised highlighter strokes, kept while they stay on screen unchanged.
+#[derive(Default)]
+pub(super) struct HighlightTiles {
+    frame: Cell<u64>,
+    tiles: RefCell<HashMap<u64, CachedTile>>,
+}
+
+struct CachedTile {
+    texture: egui::TextureHandle,
+    bounds: shapes::Bounds,
+    last_used: u64,
+}
+
+impl HighlightTiles {
+    fn begin_frame(&self) {
+        let frame = self.frame.get() + 1;
+        self.frame.set(frame);
+        self.tiles
+            .borrow_mut()
+            .retain(|_, tile| tile.last_used + 1 >= frame);
+    }
+
+    fn get(
+        &self,
+        ctx: &egui::Context,
+        points: &[Pt],
+        color: [u8; 3],
+        width: f32,
+        device_scale: f32,
+    ) -> Option<(egui::TextureId, shapes::Bounds)> {
+        let mut hasher = DefaultHasher::new();
+        for p in points {
+            (p.0.to_bits(), p.1.to_bits()).hash(&mut hasher);
+        }
+        (color, width.to_bits(), device_scale.to_bits()).hash(&mut hasher);
+        let key = hasher.finish();
+
+        let mut tiles = self.tiles.borrow_mut();
+        let tile = match tiles.entry(key) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let tile = annotate::highlight_tile(points, color, width, device_scale)?;
+                let image =
+                    egui::ColorImage::from_rgba_premultiplied(tile.size, &tile.premultiplied_rgba);
+                let texture =
+                    ctx.load_texture("kesit-highlight", image, egui::TextureOptions::LINEAR);
+                let max = (tile.origin.0 + tile.extent.0, tile.origin.1 + tile.extent.1);
+                entry.insert(CachedTile {
+                    texture,
+                    bounds: (tile.origin, max),
+                    last_used: 0,
+                })
+            }
+        };
+        tile.last_used = self.frame.get();
+        Some((tile.texture.id(), tile.bounds))
+    }
+}
+
 /// Pointer tolerance for grabbing shapes and handles, in screen points.
 const GRAB_TOL: f32 = 6.0;
 /// Side of a square resize handle, in screen points.
@@ -45,6 +109,7 @@ const HANDLE: f32 = 8.0;
 const TEXT_EDIT_ID: &str = "kesit-text-draft";
 
 pub(super) fn show(ed: &mut Editor, ui: &mut egui::Ui) {
+    ed.highlight_tiles.begin_frame();
     let avail = ui.max_rect();
     let resp = ui.allocate_rect(avail, Sense::click_and_drag());
     let image_points = (
@@ -423,15 +488,13 @@ fn paint(ed: &Editor, painter: &egui::Painter, shape: &Annotation, map: Mapping)
             color,
             width,
         } => {
-            if points.len() > 1 {
-                let c = Color32::from_rgba_unmultiplied(
-                    color[0],
-                    color[1],
-                    color[2],
-                    annotate::HIGHLIGHT_ALPHA,
-                );
-                let pts: Vec<Pos2> = points.iter().map(|p| map.to_screen(*p)).collect();
-                painter.add(Shape::line(pts, Stroke::new(width * k, c)));
+            let device_scale = k * painter.ctx().pixels_per_point();
+            if let Some((texture, bounds)) =
+                ed.highlight_tiles
+                    .get(painter.ctx(), points, *color, *width, device_scale)
+            {
+                let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+                painter.image(texture, map.rect(bounds), uv, Color32::WHITE);
             }
         }
         Annotation::Text {
