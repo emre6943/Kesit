@@ -1,0 +1,47 @@
+[package]
+name = "kesit"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "A lightweight screenshot and annotation tool for macOS and Linux"
+license = "MIT"
+readme = "README.md"
+keywords = ["screenshot", "annotation", "egui"]
+categories = ["multimedia::images", "gui"]
+publish = false
+
+[dependencies]
+ab_glyph = "0.2.32"
+anyhow = "1.0.105"
+arboard = { version = "3.7.0", features = ["wayland-data-control"] }
+dirs = "6.0.0"
+eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+egui = "0.37.0"
+epaint_default_fonts = "0.37.0"
+global-hotkey = "0.10.0"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+jiff = { version = "1.0.3", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-concatenated"] }
+rfd = "0.18.0"
+serde = { version = "1.0.229", features = ["derive"] }
+tao = "0.38.0"
+tiny-skia = { version = "0.12.0", default-features = false, features = ["std", "simd"] }
+toml = "1.2.3"
+tray-icon = "0.27.0"
+xcap = "0.9.10"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSResponder", "NSScreen", "NSView", "NSWindow"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSGeometry"] }
+raw-window-handle = "0.6.2"
+winit = { version = "0.30.13", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = "0.13.2"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
