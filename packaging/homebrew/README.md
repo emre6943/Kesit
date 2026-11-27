@@ -4,7 +4,9 @@ Homebrew casks for [Kesit](https://github.com/emre6943/Kesit), a screenshot and 
 for macOS.
 
 ```sh
-brew install --cask emre6943/tap/kesit
+brew tap emre6943/tap
+brew trust emre6943/tap   # recent Homebrew only; skip if the command does not exist
+brew install --cask kesit
 ```
 
 Kesit needs macOS 14 (Sonoma) or later. On the first capture, allow it under System Settings →

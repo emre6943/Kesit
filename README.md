@@ -31,7 +31,9 @@ screen, mark it up, then copy or save it.
 ### macOS with Homebrew
 
 ```sh
-brew install --cask emre6943/tap/kesit
+brew tap emre6943/tap
+brew trust emre6943/tap   # recent Homebrew only; skip if the command does not exist
+brew install --cask kesit
 ```
 
 Kesit needs macOS 14 (Sonoma) or later and runs natively on Apple Silicon and Intel Macs.
