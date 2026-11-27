@@ -1,6 +1,6 @@
 cask "kesit" do
   version "0.1.0"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  sha256 "0b0e034264d3beb3e550a3c4fcf168d25c3586fc48cd2628479bf1f6fa471175"
 
   url "https://github.com/emre6943/Kesit/releases/download/v#{version}/Kesit-#{version}-macos-universal.zip"
   name "Kesit"
