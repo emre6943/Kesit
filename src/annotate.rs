@@ -308,7 +308,7 @@ pub fn render(base: &RgbaImage, annotations: &[Annotation]) -> Result<RgbaImage>
 fn to_pixmap(img: &RgbaImage) -> Option<Pixmap> {
     let (w, h) = img.dimensions();
     let mut data = img.as_raw().clone();
-    for px in data.chunks_exact_mut(4) {
+    for px in data.as_chunks_mut::<4>().0 {
         let a = px[3] as u16;
         if a != 255 {
             for c in &mut px[..3] {
