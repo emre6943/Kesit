@@ -98,6 +98,7 @@ struct Toast {
 pub(crate) struct Editor {
     image: RgbaImage,
     textures: Option<Textures>,
+    highlight_tiles: canvas::HighlightTiles,
     pixel_block: u32,
     /// Physical pixels per logical point at capture time.
     image_scale: f32,
@@ -178,6 +179,7 @@ impl Editor {
         Self {
             image,
             textures: None,
+            highlight_tiles: canvas::HighlightTiles::default(),
             pixel_block,
             image_scale,
             screen: None,

@@ -357,6 +357,74 @@ fn stroke_for(width: f32, cap: LineCap, join: LineJoin) -> Stroke {
     }
 }
 
+fn stroke_highlight(
+    pixmap: &mut Pixmap,
+    points: &[Pt],
+    color: [u8; 3],
+    width: f32,
+    transform: Transform,
+) {
+    let [first, rest @ ..] = points else { return };
+    let mut paint = paint_for(color);
+    paint.set_color_rgba8(color[0], color[1], color[2], HIGHLIGHT_ALPHA);
+    let mut pb = PathBuilder::new();
+    pb.move_to(first.0, first.1);
+    for p in rest {
+        pb.line_to(p.0, p.1);
+    }
+    if let Some(path) = pb.finish() {
+        let stroke = stroke_for(width, LineCap::Butt, LineJoin::Round);
+        pixmap.stroke_path(&path, &paint, &stroke, transform, None);
+    }
+}
+
+/// A highlighter stroke rasterised on its own, for the preview.
+pub struct HighlightTile {
+    /// Top-left corner in image pixels.
+    pub origin: Pt,
+    /// Extent in image pixels.
+    pub extent: Pt,
+    pub size: [usize; 2],
+    pub premultiplied_rgba: Vec<u8>,
+}
+
+const MAX_TILE_SIDE: f32 = 4096.0;
+
+/// Rasterises a highlighter stroke at `scale` device pixels per image pixel.
+///
+/// The preview draws this instead of a translucent polyline, which would
+/// blend twice wherever the stroke overlaps itself.
+pub fn highlight_tile(
+    points: &[Pt],
+    color: [u8; 3],
+    width: f32,
+    scale: f32,
+) -> Option<HighlightTile> {
+    if points.len() < 2 {
+        return None;
+    }
+    let margin = width / 2.0 + 1.0;
+    let (mut min, mut max) = (points[0], points[0]);
+    for p in points {
+        min = (min.0.min(p.0), min.1.min(p.1));
+        max = (max.0.max(p.0), max.1.max(p.1));
+    }
+    let origin = (min.0 - margin, min.1 - margin);
+    let extent = (max.0 - min.0 + 2.0 * margin, max.1 - min.1 + 2.0 * margin);
+    let scale = scale.min(MAX_TILE_SIDE / extent.0.max(extent.1));
+    let w = (extent.0 * scale).ceil().max(1.0) as u32;
+    let h = (extent.1 * scale).ceil().max(1.0) as u32;
+    let mut pixmap = Pixmap::new(w, h)?;
+    let transform = Transform::from_translate(-origin.0, -origin.1).post_scale(scale, scale);
+    stroke_highlight(&mut pixmap, points, color, width, transform);
+    Some(HighlightTile {
+        origin,
+        extent: (w as f32 / scale, h as f32 / scale),
+        size: [w as usize, h as usize],
+        premultiplied_rgba: pixmap.take(),
+    })
+}
+
 fn draw(pixmap: &mut Pixmap, font: &FontRef<'_>, annotation: &Annotation) {
     let identity = Transform::identity();
     match annotation {
@@ -432,21 +500,7 @@ fn draw(pixmap: &mut Pixmap, font: &FontRef<'_>, annotation: &Annotation) {
             points,
             color,
             width,
-        } => {
-            let mut paint = paint_for(*color);
-            paint.set_color_rgba8(color[0], color[1], color[2], HIGHLIGHT_ALPHA);
-            let mut pb = PathBuilder::new();
-            if let [first, rest @ ..] = points.as_slice() {
-                pb.move_to(first.0, first.1);
-                for p in rest {
-                    pb.line_to(p.0, p.1);
-                }
-            }
-            if let Some(path) = pb.finish() {
-                let stroke = stroke_for(*width, LineCap::Butt, LineJoin::Round);
-                pixmap.stroke_path(&path, &paint, &stroke, identity, None);
-            }
-        }
+        } => stroke_highlight(pixmap, points, *color, *width, identity),
         Annotation::Text {
             pos,
             text,
@@ -639,6 +693,20 @@ mod tests {
             size: 40.0,
         };
         check(a, (20, 20, 160, 70));
+    }
+
+    #[test]
+    fn highlight_tile_is_uniform_where_the_stroke_crosses_itself() {
+        let points = [(10.0, 10.0), (90.0, 10.0), (10.0, 14.0), (90.0, 14.0)];
+        let tile = highlight_tile(&points, [255, 0, 0], 20.0, 1.0).expect("tile");
+        let alpha_at = |x: f32, y: f32| {
+            let col = (x - tile.origin.0) as usize;
+            let row = (y - tile.origin.1) as usize;
+            tile.premultiplied_rgba[(row * tile.size[0] + col) * 4 + 3]
+        };
+        assert_eq!(alpha_at(50.0, 12.0), HIGHLIGHT_ALPHA);
+        assert_eq!(alpha_at(50.0, 6.0), HIGHLIGHT_ALPHA);
+        assert_eq!(alpha_at(-0.5, 12.0), 0);
     }
 
     #[test]
